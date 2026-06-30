@@ -1,0 +1,27 @@
+# 5-digit ablation: answer-only loss with reversed answer digits.
+#
+# Example target: 12345+67890=532080, representing normal answer 080235.
+# This aligns generation order with right-to-left carry propagation.
+seed: 0
+operand_digits: 5
+answer_order: reversed
+vocab_size: auto
+max_seq_len: auto
+d_model: 256
+n_layers: 6
+n_heads: 8
+d_ff: 1024
+dropout: 0.0
+batch_size: 256
+learning_rate: 0.0003
+weight_decay: 0.01
+train_steps: 1000
+eval_every: 100
+eval_curriculum_slices: true
+n_train: 200000
+n_eval: 2000
+n_test: 2000
+n_carry_heavy: 2000
+prompt_loss_weight: 0.0
+answer_loss_weight: 1.0
+eos_loss_weight: 0.0

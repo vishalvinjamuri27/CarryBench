@@ -1,0 +1,13 @@
+# Core JAX stack. On Colab, install the GPU build of jax separately if this
+# resolves to CPU-only, e.g.:
+#   pip install -U "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax>=0.4.25
+jaxlib>=0.4.25
+flax>=0.8.0
+optax>=0.1.9
+
+# PyTorch baseline comparison only (not used by the main JAX model/runtime).
+torch>=2.1.0
+
+numpy>=1.24
+pyyaml>=6.0

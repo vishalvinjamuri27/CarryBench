@@ -1,0 +1,20 @@
+# Digit-length sweep: 6-digit stress test.
+seed: 0
+operand_digits: 6
+vocab_size: auto
+max_seq_len: auto
+d_model: 256
+n_layers: 6
+n_heads: 8
+d_ff: 1024
+dropout: 0.0
+batch_size: 256
+learning_rate: 0.0003
+weight_decay: 0.01
+train_steps: 1000
+eval_every: 100
+eval_curriculum_slices: true
+n_train: 200000
+n_eval: 2000
+n_test: 2000
+n_carry_heavy: 2000

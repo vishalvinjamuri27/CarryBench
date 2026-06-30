@@ -1,0 +1,26 @@
+# Tiny config for fast local smoke testing (CPU, seconds not minutes).
+# Not meant to produce a good model -- just to prove the pipeline runs.
+
+seed: 0
+
+# vocab_size / max_seq_len are derived automatically from the tokenizer and
+# the fixed-width addition format (see src/tokenizer.py, src/data.py).
+vocab_size: auto
+max_seq_len: auto
+
+d_model: 64
+n_layers: 2
+n_heads: 4
+d_ff: 256
+dropout: 0.0
+
+batch_size: 32
+learning_rate: 0.0003
+weight_decay: 0.01
+train_steps: 20
+eval_every: 10
+
+n_train: 2000
+n_eval: 200
+n_test: 200
+n_carry_heavy: 200
