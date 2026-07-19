@@ -69,8 +69,18 @@ class TestData(unittest.TestCase):
             self.assertFalse(sets[1] & sets[2])
 
     def test_impossible_unique_request_fails_fast(self):
+        capacity = data._standard_split_capacity(100, "train", seed=0)
         with self.assertRaisesRegex(ValueError, "partition"):
-            data.generate_dataset(81, seed=0, split="train", max_operand=9)
+            data.generate_dataset(capacity + 1, seed=0, split="train", max_operand=9)
+
+    def test_standard_splits_cover_operand_space_without_bands(self):
+        task = data.AdditionTask(operand_digits=3)
+        for split in ("train", "eval", "test"):
+            examples = data.generate_dataset(10_000, seed=0, split=split, task=task)
+            operands = np.array([example.a for example in examples])
+            self.assertLess(abs(float(operands.mean()) - task.operand_max / 2), 20)
+            self.assertLess(int(operands.min()), 20)
+            self.assertGreater(int(operands.max()), task.operand_max - 20)
 
     def test_generate_dataset_can_limit_operand_range(self):
         ds = data.generate_dataset(50, seed=0, split="train", max_operand=9, unique=False)

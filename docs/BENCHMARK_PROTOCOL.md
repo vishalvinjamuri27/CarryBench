@@ -3,12 +3,13 @@
 ## Quality experiments
 
 1. Use identical generated examples and batch ordering for both frameworks.
-2. Train each configuration with paired seeds.
-3. Select configurations using validation results only.
-4. Report free-running greedy exact match as the primary metric.
-5. Report teacher-forced exact match only as a diagnostic.
-6. Preserve every individual seed result and report aggregate dispersion.
-7. Use the disjoint test partition for the final release measurement.
+2. Assign pairs with a stable 64-bit hash so disjoint splits remain IID-like over the operand space.
+3. Train each configuration with paired seeds.
+4. Select configurations using validation results only.
+5. Report free-running greedy exact match as the primary metric.
+6. Report teacher-forced exact match only as a diagnostic.
+7. Preserve every individual seed result and report aggregate dispersion.
+8. Use the disjoint test partition for the final release measurement.
 
 The training scripts evaluate the disjoint `eval` partition throughout training and materialize the disjoint `test` metrics once after training for final reporting.
 

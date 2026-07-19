@@ -26,7 +26,6 @@ Layout of token indices in a full sequence:
 
 from __future__ import annotations
 
-import math
 import random
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Tuple
@@ -144,22 +143,29 @@ _SPLIT_RANGES = {
 }
 
 
-def _coprime_multiplier(size: int, seed: int) -> int:
-    """Return a deterministic multiplier defining a permutation modulo size."""
-    if size <= 1:
-        return 1
-    candidate = (2 * abs(seed) + 1) % size
-    candidate = candidate or 1
-    while math.gcd(candidate, size) != 1:
-        candidate = (candidate + 2) % size
-        candidate = candidate or 1
-    return candidate
+def _mix64(value: int) -> int:
+    """SplitMix64 finalizer used as a stable, well-dispersed integer hash."""
+    mask = (1 << 64) - 1
+    value = (value + 0x9E3779B97F4A7C15) & mask
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
+    return value ^ (value >> 31)
 
 
-def _split_index_bounds(size: int, split: str) -> Tuple[int, int]:
-    """Return an exact, non-overlapping range for a standard dataset split."""
-    lo_pct, hi_pct = _SPLIT_RANGES[split]
-    return size * lo_pct // 100, size * hi_pct // 100
+def _standard_split_for_pair(pair_id: int, seed: int) -> str:
+    """Assign a pair deterministically to an IID-like 80/10/10 partition."""
+    bucket = _mix64(pair_id ^ _mix64(seed)) % 100
+    for split, (lower, upper) in _SPLIT_RANGES.items():
+        if lower <= bucket < upper:
+            return split
+    raise AssertionError(f"Unreachable split bucket {bucket}")
+
+
+def _standard_split_capacity(pair_space: int, split: str, seed: int) -> int | None:
+    """Count exact capacity for small spaces; avoid scanning huge experiments."""
+    if pair_space > 100_000:
+        return None
+    return sum(_standard_split_for_pair(pair_id, seed) == split for pair_id in range(pair_space))
 
 
 def count_carries(a: int, b: int, operand_digits: int = OPERAND_DIGITS) -> int:
@@ -191,10 +197,11 @@ def generate_dataset(
 ) -> List[Example]:
     """Generate `n` addition examples deterministically for a given split.
 
-    Standard train/eval/test splits are disjoint by construction. Pair ids are
-    passed through a seeded affine permutation and each split receives a fixed
-    80/10/10 slice of that permutation. Other named splits use independent
-    deterministic sampling and are intended for diagnostic datasets.
+    Standard train/eval/test splits are disjoint by construction. A stable
+    64-bit hash assigns every pair to an IID-like 80/10/10 partition, avoiding
+    contiguous operand bands while preserving deterministic membership. Other
+    named splits use independent deterministic sampling and are intended for
+    diagnostic datasets.
     """
     if max_operand is None:
         max_operand = task.operand_max
@@ -205,9 +212,10 @@ def generate_dataset(
     pair_space = side * side
     rng = random.Random(_split_seed(seed, split))
 
-    split_bounds = _split_index_bounds(pair_space, split) if split in _SPLIT_RANGES else None
-    if unique and split_bounds is not None:
-        split_capacity = split_bounds[1] - split_bounds[0]
+    split_capacity = (
+        _standard_split_capacity(pair_space, split, seed) if split in _SPLIT_RANGES else pair_space
+    )
+    if unique and split_capacity is not None:
         if n > split_capacity:
             raise ValueError(
                 f"Requested {n} unique {split} examples, but its disjoint partition "
@@ -216,16 +224,11 @@ def generate_dataset(
     elif unique and n > pair_space:
         raise ValueError(f"Requested {n} unique examples from a space of only {pair_space} pairs")
 
-    multiplier = _coprime_multiplier(pair_space, seed)
-    offset = (seed * 0x9E3779B1 + 0x85EBCA77) % pair_space
-
-    def draw_pair() -> Tuple[int, int]:
-        if split_bounds is None:
-            pair_id = rng.randrange(pair_space)
-        else:
-            pair_id = rng.randrange(*split_bounds)
-        permuted = (multiplier * pair_id + offset) % pair_space
-        return divmod(permuted, side)
+    def draw_pair() -> Tuple[int, int] | None:
+        pair_id = rng.randrange(pair_space)
+        if split in _SPLIT_RANGES and _standard_split_for_pair(pair_id, seed) != split:
+            return None
+        return divmod(pair_id, side)
 
     examples = []
     seen = set()
@@ -238,7 +241,10 @@ def generate_dataset(
                 "Unable to satisfy dataset constraints; reduce n, disable uniqueness, "
                 "or relax the carry filter"
             )
-        a, b = draw_pair()
+        pair = draw_pair()
+        if pair is None:
+            continue
+        a, b = pair
         if unique and (a, b) in seen:
             continue
         if require_carry is not None and has_carry(a, b, task) != require_carry:
