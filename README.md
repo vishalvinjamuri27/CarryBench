@@ -80,7 +80,7 @@ Time-to-90% and time-to-99% summaries also use generated exact match.
 
 ## Experimental Controls
 
-- Train/eval/test pairs are assigned to exact 80/10/10 slices of a seeded affine permutation; overlap is impossible by construction.
+- A stable 64-bit hash assigns train/eval/test pairs to disjoint 80/10/10 partitions without creating contiguous operand bands.
 - JAX and PyTorch receive the same examples, batch order, architecture shape, optimizer family, learning rate, and step budget.
 - Evaluation retains partial final batches and weights metrics by example count.
 - PyTorch host transfers and reporting metrics occur outside the timed train-step region.

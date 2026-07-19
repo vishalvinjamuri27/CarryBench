@@ -3,6 +3,7 @@
 ## 0.2.0 - Unreleased
 
 - Make train/eval/test splits disjoint by construction.
+- Use hash-based split membership to keep disjoint partitions IID-like over operand values.
 - Promote free-running generated exact match to the primary quality metric.
 - Add generated evaluation for JAX and PyTorch, including carry-heavy slices.
 - Remove host-side PyTorch metrics from timed training steps.
