@@ -1,0 +1,41 @@
+{
+  "backend": "torch",
+  "device": "cuda",
+  "compiled": false,
+  "torch_sdpa": false,
+  "model_params": 4750095,
+  "precision": "float32",
+  "peak_device_memory_bytes": 450313216,
+  "batch_size": 256,
+  "seq_len": 13,
+  "operand_digits": 3,
+  "result_digits": 4,
+  "prompt_len": 9,
+  "answer_order": "normal",
+  "first_step_compile_or_warmup_time_sec": 0.3831477300000188,
+  "steady_state_step_time_ms": 16.7043627015914,
+  "tokens_per_sec": 199229.39051622403,
+  "eval_teacher_forced_exact_match_accuracy": 0.6515,
+  "eval_generated_exact_match_accuracy": 0.6515,
+  "test_generated_exact_match_accuracy": 0.629,
+  "eval_token_accuracy": 0.5403077068328858,
+  "carry_heavy_exact_match_accuracy": 0.883,
+  "carry_heavy_generated_exact_match_accuracy": 0.883,
+  "timing_statistics": {
+    "mean_ms": 16.7043627015914,
+    "median_ms": 16.50778449993595,
+    "p95_ms": 18.06461899950591,
+    "std_ms": 0.6835310578677234
+  },
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "jax": "0.7.2",
+    "jaxlib": "0.7.2",
+    "flax": "0.11.2",
+    "optax": "0.2.8",
+    "torch": "2.11.0+cu128",
+    "numpy": "2.0.2",
+    "git_commit": "c297319c5a08b35497195741ea287638192ce5be"
+  }
+}

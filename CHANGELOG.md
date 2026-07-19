@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.2.0 - 2026-07-19
 
 - Make train/eval/test splits disjoint by construction.
 - Use hash-based split membership to keep disjoint partitions IID-like over operand values.
@@ -11,6 +11,7 @@
 - Record timing distributions, package versions, platform, and Git revision.
 - Preserve partial evaluation batches and validate experiment configurations.
 - Expand tests, CI, packaging, licensing, and result summarization.
+- Publish corrected multi-seed quality results, runtime baselines, KV-cache sweeps, plots, and raw JSON artifacts.
 
 ## 0.1.0 - 2026-06-29
 
