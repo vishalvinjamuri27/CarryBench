@@ -64,7 +64,7 @@ At batch 32 and 64 generated tokens, cached decoding reached 34,132 tokens/s ver
 
 ![Naive versus KV-cache decoding throughput](artifacts/final/kv_cache_throughput.png)
 
-All aggregate tables, plots, and the 45 source JSON files behind these claims are committed under [`artifacts/final/`](artifacts/final/). See its provenance note before comparing quality and runtime runs.
+The compact publication artifacts—aggregate CSVs, plots, and provenance—are committed under [`artifacts/final/`](artifacts/final/). The Colab workflow regenerates the complete raw bundle when a full audit is needed.
 
 ## What Is Implemented
 
@@ -190,14 +190,14 @@ Then create the reviewable release bundle:
 ./scripts/export_release_artifacts.sh
 ```
 
-Generated files include raw JSON, per-run tables, aggregate means and standard deviations, bootstrap intervals for generated accuracy, environment metadata, and SVG/PNG plots. Release-ready files are copied to `artifacts/final/`; checkpoints remain ignored.
+Generated files include raw JSON, per-run tables, aggregate means and standard deviations, bootstrap intervals for generated accuracy, environment metadata, and SVG/PNG plots. The repository keeps only compact CSV summaries and PNG plots in `artifacts/final/`; the complete local bundle remains available for independent audit. Checkpoints remain ignored.
 
 The Colab notebook also creates `results_bundle.zip` containing both `results/` and `artifacts/` for independent audit or a future rerun.
 
 ## Repository Layout
 
 ```text
-artifacts/final/          Committable final tables, raw JSON, and plots
+artifacts/final/          Compact final CSV tables, PNG plots, and provenance
 configs/                  Experiment definitions
 docs/                     Protocol and limitations
 scripts/                  Smoke, final-suite, and artifact-export runners

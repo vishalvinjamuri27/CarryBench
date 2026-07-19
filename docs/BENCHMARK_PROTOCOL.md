@@ -32,4 +32,4 @@ The training scripts evaluate the disjoint `eval` partition throughout training 
 
 ## Artifact policy
 
-Raw JSON and derived tables/plots supporting README claims belong in `artifacts/final`. Checkpoints and temporary generated configs remain excluded.
+The complete local release bundle contains raw JSON and all derived formats. Git tracks the compact aggregate/per-run CSVs, PNG plots, and provenance in `artifacts/final`; checkpoints, duplicate formats, and temporary generated configs remain excluded.

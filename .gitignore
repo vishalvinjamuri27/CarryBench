@@ -8,3 +8,8 @@ __pycache__/
 # Generated benchmark/training outputs and checkpoints -- keep the dir via .gitkeep
 results/*
 !results/.gitkeep
+
+# Expanded release exports are reproducible; Git keeps compact CSV/PNG artifacts only
+artifacts/final/raw/
+artifacts/final/*.svg
+artifacts/final/summary_*.md
