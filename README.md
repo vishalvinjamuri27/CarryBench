@@ -6,6 +6,17 @@
 
 CarryBench is a controlled ML-systems study of matched decoder-only transformers implemented directly in JAX/Flax/Optax and PyTorch. Fixed-width addition provides deterministic data, short iteration cycles, interpretable failure modes, and an exact task-level metric.
 
+## At a Glance
+
+- **ML systems:** matched transformer implementations, JAX/XLA JIT, PyTorch SDPA and `torch.compile`, mixed precision, synchronized GPU timing, and KV-cache decoding.
+- **Experimental design:** paired seeds, deterministic hash-disjoint splits, controlled ablations, free-running evaluation, bootstrap intervals, and explicit threats to validity.
+- **Production habits:** typed configuration-driven CLIs, 36 tests across Python 3.10–3.12, smoke-training CI, reproducible Colab execution, raw artifacts, and release provenance.
+- **Headline result:** carry-aligned reversed answers achieved 100% generated exact match across both frameworks, both digit lengths, and all three seeds.
+
+For a two-minute technical review, inspect the [JAX model](src/flax_model.py), [PyTorch model](src/torch_model.py), [KV-cache implementation](src/kv_cache_jax.py), [framework-parity tests](tests/test_framework_parity.py), and [artifact provenance](artifacts/final/README.md).
+
+## Research Questions
+
 The project tests two separate questions:
 
 1. How do JAX and PyTorch runtime choices affect compile cost, training throughput, latency, and memory?
@@ -148,6 +159,8 @@ ruff check src tests
 ruff format --check src tests
 ./scripts/run_smoke.sh
 ```
+
+The smoke path is intentionally small enough for a CPU code review. Full published measurements require a CUDA GPU and use the Colab workflow below.
 
 ## Reproduce the GPU Study
 
