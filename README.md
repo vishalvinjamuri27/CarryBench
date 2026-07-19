@@ -11,41 +11,49 @@ The project tests two separate questions:
 1. How do JAX and PyTorch runtime choices affect compile cost, training throughput, latency, and memory?
 2. How do loss masking and carry-aligned answer order affect free-running algorithmic generalization?
 
-## Phase 2 Results Pending
+## Results
 
-The original public-release numbers were based on teacher-forced answer-token predictions. That metric lets later answer positions observe earlier ground-truth answer digits, so it is not sufficient evidence that the model independently generates the correct sum.
+The clearest result is algorithmic: emitting the answer least-significant digit first, aligned with carry propagation, reached **100% free-running exact match** for both frameworks at 5 and 6 digits. Normal-order answer-only training was strong in JAX but unstable in PyTorch at the same 1,000-step budget; a 3,000-step 6-digit run reached about 99.3% in both frameworks. Full-sequence language-model loss was substantially worse.
 
-Version `0.2.0` promotes **free-running generated exact match** to the primary metric and retires the old headline table. Final A100 results will be published after the updated Colab suite is rerun. Teacher-forced accuracy remains available as a diagnostic and is labeled explicitly.
+### Generalization quality
 
-This is intentional scientific versioning: claims are withheld until the corrected experiment produces auditable raw artifacts.
+Values are mean ± sample standard deviation across seeds 0, 1, and 2 on the hash-partitioned, disjoint test set. The metric greedily generates the complete answer; no ground-truth answer tokens are supplied during decoding.
 
-### Phase 2 result-table preview — placeholders only
+| Experiment (1,000 steps) | JAX test exact match | PyTorch test exact match |
+|---|---:|---:|
+| 5-digit full-sequence LM | 34.35% ± 50.10% | 1.07% ± 0.51% |
+| 6-digit full-sequence LM | 2.73% ± 4.69% | 0.12% ± 0.13% |
+| 5-digit answer-only | 94.95% ± 0.75% | 74.33% ± 32.51% |
+| 6-digit answer-only | 91.72% ± 0.88% | 52.48% ± 47.53% |
+| 5-digit reversed answer | **100.00% ± 0.00%** | **100.00% ± 0.00%** |
+| 6-digit reversed answer | **100.00% ± 0.00%** | **100.00% ± 0.00%** |
 
-The final report will use the schemas below. Every `TBD` entry is a placeholder, **not a measured result or performance claim**.
+The large standard deviations are part of the result, not noise to hide: three seeds are enough to expose brittle optimization but not to estimate it precisely. The single-seed 3,000-step 6-digit answer-only runs reached 99.25% (JAX) and 99.30% (PyTorch); they demonstrate convergence with more compute but are not multi-seed estimates.
 
-Quality results will report free-running accuracy on the disjoint test set:
+![Generated exact-match results](artifacts/final/generated_accuracy.png)
 
-| Experiment | JAX generated exact match | PyTorch generated exact match | Seeds |
-|---|---:|---:|---:|
-| 5-digit full-sequence LM | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
-| 6-digit full-sequence LM | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
-| 5-digit answer-only | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
-| 6-digit answer-only | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
-| 5-digit reversed answer | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
-| 6-digit reversed answer | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+### Training runtime
 
-Runtime results will distinguish compilation strategy and precision:
+These are synchronized measurements for the dedicated 4.75M-parameter, batch-256, sequence-length-13 runtime workload. Throughput comparisons are within this fixed shape and software environment, not universal framework rankings.
 
-| Backend | Precision | First step | Median ms/step | p95 ms/step | Tokens/sec | Peak memory |
+| Backend | Precision | First step (s) | Median ms/step | p95 ms/step | Tokens/s | Peak device memory |
 |---|---|---:|---:|---:|---:|---:|
-| JAX JIT | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| JAX JIT | BF16 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| PyTorch eager/manual attention | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| PyTorch eager/SDPA | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| PyTorch compiled/SDPA | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| PyTorch compiled/SDPA | BF16 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| JAX JIT | FP32 | 19.08 | **7.25** | **8.11** | **451,464** | 547 MB |
+| JAX JIT | BF16 | 18.72 | 12.08 | 13.22 | 272,828 | 409 MB |
+| PyTorch eager/manual attention | FP32 | 0.38 | 16.51 | 18.06 | 199,229 | 450 MB |
+| PyTorch eager/SDPA | FP32 | 0.38 | 12.60 | 13.76 | 260,764 | 443 MB |
+| PyTorch compiled/SDPA | FP32 | 14.98 | 11.14 | 11.79 | 296,532 | 449 MB |
+| PyTorch compiled/SDPA | BF16 | 16.06 | 12.04 | 13.27 | 268,388 | **307 MB** |
 
-KV-cache results will report warmed prefill latency, decode latency, total latency, and decode throughput for every `(batch size, generated length)` pair. Phase 2 will replace these tables only from the committed raw JSON and generated aggregate CSV files.
+After warm-up, JAX FP32 delivered 1.52× the throughput of compiled PyTorch SDPA and 2.27× that of eager handwritten attention for this small workload, at the cost of a 19.08-second first-step compile. BF16 reduced reported memory but did not improve throughput here, consistent with this model being too small for a blanket mixed-precision speedup claim. Framework memory counters are not guaranteed to capture identical allocator semantics.
+
+### KV-cache decoding
+
+At batch 32 and 64 generated tokens, cached decoding reached 34,132 tokens/s versus 16,337 tokens/s for naive decoding—a 2.09× speedup. The advantage increased with longer and larger-batch decoding; the full sweep covers batches 1, 8, and 32 and lengths 5, 16, 32, and 64.
+
+![Naive versus KV-cache decoding throughput](artifacts/final/kv_cache_throughput.png)
+
+All aggregate tables, plots, and the 45 source JSON files behind these claims are committed under [`artifacts/final/`](artifacts/final/). See its provenance note before comparing quality and runtime runs.
 
 ## What Is Implemented
 
@@ -171,7 +179,7 @@ Then create the reviewable release bundle:
 
 Generated files include raw JSON, per-run tables, aggregate means and standard deviations, bootstrap intervals for generated accuracy, environment metadata, and SVG/PNG plots. Release-ready files are copied to `artifacts/final/`; checkpoints remain ignored.
 
-The Colab notebook also creates `results_bundle.zip`. Download that archive and provide it for the Phase 2 audit; it contains both `results/` and `artifacts/`.
+The Colab notebook also creates `results_bundle.zip` containing both `results/` and `artifacts/` for independent audit or a future rerun.
 
 ## Repository Layout
 
@@ -196,16 +204,15 @@ colab_run.ipynb           GPU experiment runner and artifact bundler
 
 ## Current Verification
 
-Phase 1 was verified locally on CPU with:
+The code and published artifacts were verified with:
 
-- 35 passing tests.
+- 36 passing tests.
 - JAX smoke training end to end.
 - PyTorch smoke training end to end.
 - JAX naive/KV-cache output equivalence.
 - PyTorch manual-attention/SDPA numerical equivalence.
 - Ruff lint and format checks.
-
-GPU results are deliberately not claimed until the Phase 2 artifacts are produced.
+- Integrity checks that every published quality run uses the corrected hash split and records generated test predictions.
 
 ## License
 
