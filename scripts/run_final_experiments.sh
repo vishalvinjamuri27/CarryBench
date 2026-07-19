@@ -77,6 +77,32 @@ if [[ "$RUN_RUNTIME" == "1" ]]; then
   echo "== Standard runtime benchmarks =="
   python3 -m src.benchmark --backend jax --config configs/colab_gpu.yaml
   python3 -m src.benchmark --backend torch --config configs/colab_gpu.yaml
+  sdpa_config="${GENERATED_CONFIG_DIR}/colab_gpu_sdpa.yaml"
+  python3 - configs/colab_gpu.yaml "$sdpa_config" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f)
+cfg["torch_sdpa"] = True
+with open(sys.argv[2], "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
+PY
+  python3 -m src.benchmark --backend torch --config "$sdpa_config"
+  python3 -m src.benchmark --backend torch --config "$sdpa_config" --compile
+  bf16_config="${GENERATED_CONFIG_DIR}/colab_gpu_sdpa_bf16.yaml"
+  python3 - "$sdpa_config" "$bf16_config" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1]) as f:
+    cfg = yaml.safe_load(f)
+cfg["precision"] = "bfloat16"
+with open(sys.argv[2], "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
+PY
+  python3 -m src.benchmark --backend jax --config "$bf16_config"
+  python3 -m src.benchmark --backend torch --config "$bf16_config" --compile
   python3 -m src.benchmark --backend kv-cache --config configs/colab_gpu.yaml
 fi
 

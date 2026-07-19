@@ -26,6 +26,7 @@ Layout of token indices in a full sequence:
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Tuple
@@ -136,6 +137,31 @@ def _split_seed(seed: int, split: str) -> int:
     return seed * 10_000 + offset
 
 
+_SPLIT_RANGES = {
+    "train": (0, 80),
+    "eval": (80, 90),
+    "test": (90, 100),
+}
+
+
+def _coprime_multiplier(size: int, seed: int) -> int:
+    """Return a deterministic multiplier defining a permutation modulo size."""
+    if size <= 1:
+        return 1
+    candidate = (2 * abs(seed) + 1) % size
+    candidate = candidate or 1
+    while math.gcd(candidate, size) != 1:
+        candidate = (candidate + 2) % size
+        candidate = candidate or 1
+    return candidate
+
+
+def _split_index_bounds(size: int, split: str) -> Tuple[int, int]:
+    """Return an exact, non-overlapping range for a standard dataset split."""
+    lo_pct, hi_pct = _SPLIT_RANGES[split]
+    return size * lo_pct // 100, size * hi_pct // 100
+
+
 def count_carries(a: int, b: int, operand_digits: int = OPERAND_DIGITS) -> int:
     """Return how many digit positions produce a carry when adding a + b."""
     carries = 0
@@ -165,22 +191,54 @@ def generate_dataset(
 ) -> List[Example]:
     """Generate `n` addition examples deterministically for a given split.
 
-    Splits are made disjoint by partitioning the full (a, b) space with a
-    seeded random permutation and slicing disjoint chunks per split, so
-    train/eval/test never share an (a, b) pair as long as n_train + n_eval +
-    n_test does not exceed the space of unique pairs actually sampled.
+    Standard train/eval/test splits are disjoint by construction. Pair ids are
+    passed through a seeded affine permutation and each split receives a fixed
+    80/10/10 slice of that permutation. Other named splits use independent
+    deterministic sampling and are intended for diagnostic datasets.
     """
     if max_operand is None:
         max_operand = task.operand_max
     if not (0 <= max_operand <= task.operand_max):
         raise ValueError(f"max_operand must be in [0, {task.operand_max}], got {max_operand}")
 
+    side = max_operand + 1
+    pair_space = side * side
     rng = random.Random(_split_seed(seed, split))
+
+    split_bounds = _split_index_bounds(pair_space, split) if split in _SPLIT_RANGES else None
+    if unique and split_bounds is not None:
+        split_capacity = split_bounds[1] - split_bounds[0]
+        if n > split_capacity:
+            raise ValueError(
+                f"Requested {n} unique {split} examples, but its disjoint partition "
+                f"contains only {split_capacity} pairs for max_operand={max_operand}"
+            )
+    elif unique and n > pair_space:
+        raise ValueError(f"Requested {n} unique examples from a space of only {pair_space} pairs")
+
+    multiplier = _coprime_multiplier(pair_space, seed)
+    offset = (seed * 0x9E3779B1 + 0x85EBCA77) % pair_space
+
+    def draw_pair() -> Tuple[int, int]:
+        if split_bounds is None:
+            pair_id = rng.randrange(pair_space)
+        else:
+            pair_id = rng.randrange(*split_bounds)
+        permuted = (multiplier * pair_id + offset) % pair_space
+        return divmod(permuted, side)
+
     examples = []
     seen = set()
+    attempts = 0
+    max_attempts = max(10_000, n * 10_000)
     while len(examples) < n:
-        a = rng.randint(0, max_operand)
-        b = rng.randint(0, max_operand)
+        attempts += 1
+        if attempts > max_attempts:
+            raise ValueError(
+                "Unable to satisfy dataset constraints; reduce n, disable uniqueness, "
+                "or relax the carry filter"
+            )
+        a, b = draw_pair()
         if unique and (a, b) in seen:
             continue
         if require_carry is not None and has_carry(a, b, task) != require_carry:
@@ -212,9 +270,13 @@ def make_curriculum_dataset(
     if sampling == "random":
         return generate_dataset(n, seed, split, max_operand=max_operand, unique=False, task=task)
     if sampling == "no_carry":
-        return generate_dataset(n, seed, split, max_operand=max_operand, require_carry=False, unique=False, task=task)
+        return generate_dataset(
+            n, seed, split, max_operand=max_operand, require_carry=False, unique=False, task=task
+        )
     if sampling == "carry":
-        return generate_dataset(n, seed, split, max_operand=max_operand, require_carry=True, unique=False, task=task)
+        return generate_dataset(
+            n, seed, split, max_operand=max_operand, require_carry=True, unique=False, task=task
+        )
     if sampling == "carry_heavy":
         return make_carry_heavy_dataset(n, seed + _stable_stage_offset(stage_name), unique=False, task=task)
     if sampling == "carry_mix":
@@ -222,7 +284,9 @@ def make_curriculum_dataset(
             raise ValueError(f"carry_fraction must be in [0, 1], got {carry_fraction}")
         n_carry = int(round(n * carry_fraction))
         n_random = n - n_carry
-        random_examples = generate_dataset(n_random, seed, split, max_operand=max_operand, unique=False, task=task)
+        random_examples = generate_dataset(
+            n_random, seed, split, max_operand=max_operand, unique=False, task=task
+        )
         carry_examples = make_carry_heavy_dataset(
             n_carry, seed + _stable_stage_offset(stage_name), unique=False, task=task
         )

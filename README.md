@@ -1,167 +1,212 @@
-# CarryBench: JAX vs PyTorch Transformer Runtime Benchmark
+# CarryBench: Audited JAX vs PyTorch Transformer Benchmark
 
+[![Tests](https://github.com/vishalvinjamuri27/CarryBench/actions/workflows/tests.yml/badge.svg)](https://github.com/vishalvinjamuri27/CarryBench/actions/workflows/tests.yml)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/vishalvinjamuri27/CarryBench/blob/main/colab_run.ipynb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This is a controlled benchmark comparing a decoder-only transformer in **JAX/Flax/Optax** against a matched **PyTorch** baseline on the task of fixed-width algorithmic addition. The goal is not to prove that transformers can do addition; addition is used as a compact task for studying framework/runtime behavior.
+CarryBench is a controlled ML-systems study of matched decoder-only transformers implemented directly in JAX/Flax/Optax and PyTorch. Fixed-width addition provides deterministic data, short iteration cycles, interpretable failure modes, and an exact task-level metric.
 
-## Highlights
+The project tests two separate questions:
 
-- Matched JAX/Flax and PyTorch decoder-only transformer implementations.
-- Reproducible synthetic addition datasets with fixed sequence lengths.
-- Multi-seed A100 GPU experiments for 5- and 6-digit addition.
-- Answer-only and reversed-answer ablations to isolate why addition is hard for causal LMs.
-- JAX naive decoding vs manual KV-cache decoding benchmark.
-- One-command experiment runner and CSV/Markdown result summaries.
+1. How do JAX and PyTorch runtime choices affect compile cost, training throughput, latency, and memory?
+2. How do loss masking and carry-aligned answer order affect free-running algorithmic generalization?
 
-## Main Result
+## Phase 2 Results Pending
 
-The strongest task formulation is **6-digit addition with answer-only loss and reversed answer digits**. The arithmetic problem is the same, but the answer digits are rendered right-to-left so autoregressive generation follows carry propagation.
+The original public-release numbers were based on teacher-forced answer-token predictions. That metric lets later answer positions observe earlier ground-truth answer digits, so it is not sufficient evidence that the model independently generates the correct sum.
 
-Reported on an **NVIDIA A100 GPU**, seeds `0, 1, 2`:
+Version `0.2.0` promotes **free-running generated exact match** to the primary metric and retires the old headline table. Final A100 results will be published after the updated Colab suite is rerun. Teacher-forced accuracy remains available as a diagnostic and is labeled explicitly.
 
-| Experiment | JAX exact match | PyTorch exact match |
-|---|---:|---:|
-| 5-digit full-sequence LM | `0.494 +/- 0.461` | `0.009 +/- 0.007` |
-| 6-digit full-sequence LM | `0.064 +/- 0.108` | `0.000 +/- 0.000` |
-| 5-digit answer-only | `0.962 +/- 0.019` | `0.920 +/- 0.035` |
-| 6-digit answer-only | `0.904 +/- 0.036` | `0.320 +/- 0.542` |
-| 6-digit answer-only, 3000 steps | `0.932` | `0.996` |
-| 5-digit reversed answer | `1.000 +/- 0.000` | `1.000 +/- 0.000` |
-| 6-digit reversed answer | `1.000 +/- 0.000` | `1.000 +/- 0.000` |
+This is intentional scientific versioning: claims are withheld until the corrected experiment produces auditable raw artifacts.
 
-The takeaway is that full-sequence LM loss is a poor formulation for longer addition because it spends loss on random prompt digits. Answer-only loss makes the task significantly more learnable, especially for JAX at 1000 steps. Reversing the answer digits aligns generation with carry propagation, making 5- and 6-digit addition solve cleanly.
+### Phase 2 result-table preview — placeholders only
 
-Runtime on the standard 3-digit benchmark:
+The final report will use the schemas below. Every `TBD` entry is a placeholder, **not a measured result or performance claim**.
 
-| Backend | First step | Steady ms/step | Tokens/sec | Exact match |
-|---|---:|---:|---:|---:|
-| JAX/Flax | `19.61s` | `7.72` | `431k` | `1.000` |
-| PyTorch eager | `0.44s` | `18.80` | `177k` | `1.000` |
+Quality results will report free-running accuracy on the disjoint test set:
 
-JAX/XLA has a large one-time compile cost, but then runs about **2.4x faster** than PyTorch eager mode during steady-state training for this workload.
+| Experiment | JAX generated exact match | PyTorch generated exact match | Seeds |
+|---|---:|---:|---:|
+| 5-digit full-sequence LM | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+| 6-digit full-sequence LM | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+| 5-digit answer-only | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+| 6-digit answer-only | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+| 5-digit reversed answer | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+| 6-digit reversed answer | `TBD mean ± std` | `TBD mean ± std` | `TBD` |
+
+Runtime results will distinguish compilation strategy and precision:
+
+| Backend | Precision | First step | Median ms/step | p95 ms/step | Tokens/sec | Peak memory |
+|---|---|---:|---:|---:|---:|---:|
+| JAX JIT | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| JAX JIT | BF16 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| PyTorch eager/manual attention | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| PyTorch eager/SDPA | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| PyTorch compiled/SDPA | FP32 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| PyTorch compiled/SDPA | BF16 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+
+KV-cache results will report warmed prefill latency, decode latency, total latency, and decode throughput for every `(batch size, generated length)` pair. Phase 2 will replace these tables only from the committed raw JSON and generated aggregate CSV files.
+
+## What Is Implemented
+
+- Matched decoder-only transformer implementations without Hugging Face dependencies.
+- Exact GELU and matched LayerNorm epsilon across frameworks.
+- Deterministic, disjoint train/validation/test partitions.
+- Free-running greedy exact match for JAX and PyTorch.
+- Teacher-forced accuracy retained under an explicit diagnostic name.
+- Full-sequence, answer-only, and reversed-answer ablations.
+- JAX JIT training and PyTorch eager, SDPA, and `torch.compile` baselines.
+- Synchronized timing distributions: mean, median, p95, and standard deviation.
+- Manual JAX KV-cache decoding validated against naive decoding.
+- KV-cache sweeps over batch size and generated length.
+- Carry-heavy diagnostic sets and curriculum evaluation slices.
+- Raw JSON, CSV, Markdown, environment, Git revision, and plot generation.
+- CPU unit tests, smoke training, linting, formatting, and multi-version CI.
+
+## Primary Metrics
+
+| Metric | Purpose |
+|---|---|
+| Generated exact match | Primary quality metric; greedily decodes the entire answer from the prompt |
+| Teacher-forced exact match | Diagnostic next-token metric; not treated as task success |
+| Carry-heavy generated exact match | Stress test for long carry behavior |
+| Steady train-step time | Synchronized post-warm-up forward/backward/update latency |
+| Tokens/sec | Training throughput for the measured batch and sequence shape |
+| First-step time | Compile or framework warm-up cost |
+| Median/p95/std | Timing stability rather than a single average |
+| KV decode tokens/sec | Naive and cached autoregressive decode throughput |
+
+Time-to-90% and time-to-99% summaries also use generated exact match.
+
+## Experimental Controls
+
+- Train/eval/test pairs are assigned to exact 80/10/10 slices of a seeded affine permutation; overlap is impossible by construction.
+- JAX and PyTorch receive the same examples, batch order, architecture shape, optimizer family, learning rate, and step budget.
+- Evaluation retains partial final batches and weights metrics by example count.
+- PyTorch host transfers and reporting metrics occur outside the timed train-step region.
+- Runtime results record Python, framework, platform, and Git-commit metadata.
+- JAX/XLA versus PyTorch eager is never treated as the only framework comparison; SDPA and compiled PyTorch results are generated alongside it.
+
+See [Benchmark Protocol](docs/BENCHMARK_PROTOCOL.md) and [Limitations](docs/LIMITATIONS.md).
 
 ## Architecture
 
-Both backends implement the same GPT-style decoder-only transformer: token embeddings, learned positional embeddings, pre-norm causal self-attention blocks, GELU MLPs, final LayerNorm, and an untied LM head.
+Both implementations use token and learned positional embeddings, pre-norm causal self-attention blocks, exact GELU MLPs, a final LayerNorm, and an untied language-model head.
 
 ```mermaid
-flowchart TD
-    A["Input token IDs"] --> B["Token embedding"]
-    B --> C["Learned position embedding"]
-    C --> D1
-    D6 --> E["Final LayerNorm"]
-    E --> F["Linear LM head"]
-    F --> G["Next-token logits"]
-
-    subgraph Block["Transformer block x N"]
-        D1["LayerNorm"] --> D2["Causal multi-head attention"]
-        D2 --> D3["Residual add"]
-        D3 --> D4["LayerNorm"]
-        D4 --> D5["GELU MLP"]
-        D5 --> D6["Residual add"]
-    end
+flowchart LR
+    A[Prompt tokens] --> B[Token + position embedding]
+    B --> C[Pre-norm causal attention blocks]
+    C --> D[Final LayerNorm]
+    D --> E[LM head]
+    E --> F[Greedy answer generation]
 ```
 
-## Task
-
-Each example is a fixed-width character sequence:
+For `n`-digit operands, examples use a fixed `n + 1` digit answer:
 
 ```text
-<bos> aaa+bbb=cccc <eos>
+<bos>007+008=0015<eos>
 ```
 
-Examples:
-
-```text
-007+008=0015
-123+456=0579
-999+999=1998
-```
-
-For `n`-digit operands, the answer width is `n + 1`. The exact-match accuracy is computed over the answer span, because one wrong digit makes the arithmetic answer wrong.
-
-The reversed-answer ablation configures the output digits right-to-left:
+The reversed-answer ablation emits least-significant digits first so generation follows carry propagation:
 
 ```text
 12345+67890=532080
 ```
 
-The normal answer is `080235` but the model is trained to return `532080`.
+Here `532080` is the reverse of the normal fixed-width answer `080235`.
 
 ## Local Setup
 
 ```bash
 git clone https://github.com/vishalvinjamuri27/CarryBench.git
 cd CarryBench
-
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run local tests and smoke checks:
+For the exact locally verified CPU package set:
+
+```bash
+pip install -r requirements-lock-cpu.txt
+```
+
+Run tests and smoke training:
 
 ```bash
 python -m unittest discover -s tests
+ruff check src tests
+ruff format --check src tests
 ./scripts/run_smoke.sh
 ```
 
-## Reproduce The Main Experiment
+## Reproduce the GPU Study
 
-The notebook is the easiest way to reproduce the full experiment:
-
-- [`colab_run.ipynb`](colab_run.ipynb)
-
-Use a CUDA GPU runtime, then run:
+Open [colab_run.ipynb](colab_run.ipynb), select a CUDA GPU, verify that both frameworks detect it, and run all cells. The main command is:
 
 ```bash
-!./scripts/run_final_experiments.sh
+./scripts/run_final_experiments.sh
 ```
 
-This runs the 5- and 6-digit experiments across 3 seeds (`0, 1, 2`), the answer-only and reversed-answer ablations, the long 6-digit answer-only check, and the runtime/KV-cache benchmarks.
+It runs the multi-seed quality suite plus these runtime variants:
 
-Results are written to `results/*.json` and summarized into `summary_table.csv`, `summary_table.md`, `summary_aggregate.csv`, and `summary_aggregate.md`.
+- JAX JIT.
+- PyTorch handwritten eager attention.
+- PyTorch eager SDPA.
+- PyTorch compiled SDPA.
+- JAX naive and KV-cached decoding across multiple batch and decode lengths.
 
-## JAX JIT vs PyTorch Eager
+The default remains three seeds for Colab cost. For stronger accuracy estimates, run at least five:
 
-- JAX/Flax uses an XLA JIT-compiled training step.
-- The primary PyTorch baseline uses eager execution.
-- `first_step_time_sec` includes JAX compilation cost.
-- `steady_state_step_time_ms` measures repeated post-warmup training throughput.
+```bash
+SEEDS="0 1 2 3 4" ./scripts/run_final_experiments.sh
+```
 
-This speedup should be read specifically as a comparison between JAX/XLA-compiled training and PyTorch eager execution for this model, task, and A100 GPU. The PyTorch trainer includes a `--compile` option, but the main results use eager mode because it is the more reliable baseline across notebook runtimes.
+Then create the reviewable release bundle:
 
-## JAX KV-Cache Decode
+```bash
+./scripts/export_release_artifacts.sh
+```
 
-On the short 3-digit benchmark the manual JAX KV-cache decoding improves warmed batch-32 decode throughput from `23.8k` to `35.5k` generated tokens/sec, about **1.5x**. The sequence is short so this is a conservative KV-cache case. Longer generated sequences should benefit more.
+Generated files include raw JSON, per-run tables, aggregate means and standard deviations, bootstrap intervals for generated accuracy, environment metadata, and SVG/PNG plots. Release-ready files are copied to `artifacts/final/`; checkpoints remain ignored.
 
-## Technologies
-
-JAX, Flax, Optax, PyTorch, NumPy, YAML, Jupyter/Colab, and GitHub Actions.
+The Colab notebook also creates `results_bundle.zip`. Download that archive and provide it for the Phase 2 audit; it contains both `results/` and `artifacts/`.
 
 ## Repository Layout
 
 ```text
-configs/                 Experiment configs
-scripts/                 Smoke test and final experiment runners
+artifacts/final/          Committable final tables, raw JSON, and plots
+configs/                  Experiment definitions
+docs/                     Protocol and limitations
+scripts/                  Smoke, final-suite, and artifact-export runners
 src/
-  data.py                Synthetic addition data and eval-slice helpers
-  flax_model.py          JAX/Flax transformer
-  torch_model.py         Matched PyTorch transformer
-  train_jax.py           JAX training loop
-  train_torch.py         PyTorch training loop
-  kv_cache_jax.py        Manual JAX KV-cache inference
-  benchmark.py           Runtime benchmark CLI
-  summarize_results.py   JSON-to-CSV/Markdown summarizer
-tests/                   Unit tests
-colab_run.ipynb          Notebook runner / live demo
+  data.py                 Disjoint synthetic datasets and diagnostic slices
+  flax_model.py           JAX/Flax transformer
+  torch_model.py          PyTorch transformer with manual/SDPA attention
+  train_jax.py            Jitted training and generated evaluation
+  train_torch.py          Eager/compiled training and generated evaluation
+  kv_cache_jax.py         Manual JAX KV-cache inference
+  benchmark.py            Runtime and decode benchmark CLI
+  summarize_results.py    Per-run and aggregate result summaries
+  plot_results.py         Accuracy and KV-cache plots
+tests/                    Unit, integration, split, generation, and SDPA tests
+colab_run.ipynb           GPU experiment runner and artifact bundler
 ```
 
-## Key Design Decisions
+## Current Verification
 
-- **Fixed-width data:** removes padding and variable-length batching effects.
-- **Matched model shapes:** same transformer family, optimizer recipe, dataset, and train-step budget across backends.
-- **Exact-match metric:** evaluates whether the full arithmetic answer is correct and not just whether most tokens are right.
-- **Answer-only loss:** avoids optimizing on random prompt digits that are inputs rather than meaningful targets.
-- **Reversed answer digits:** tests whether carry-aligned generation is the main barrier for longer addition.
-- **Separate compile and steady-state timing:** avoids mixing XLA compilation cost with warmed throughput.
+Phase 1 was verified locally on CPU with:
+
+- 35 passing tests.
+- JAX smoke training end to end.
+- PyTorch smoke training end to end.
+- JAX naive/KV-cache output equivalence.
+- PyTorch manual-attention/SDPA numerical equivalence.
+- Ruff lint and format checks.
+
+GPU results are deliberately not claimed until the Phase 2 artifacts are produced.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

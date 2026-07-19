@@ -23,10 +23,9 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from . import data
+from . import data, utils
 from . import metrics as metrics_lib
 from . import tokenizer as tok
-from . import utils
 from .flax_model import DecoderOnlyTransformer, TransformerConfig
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
@@ -35,12 +34,13 @@ RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 def build_model_config(cfg: Dict, task: data.AdditionTask) -> TransformerConfig:
     return TransformerConfig(
         vocab_size=tok.VOCAB_SIZE,
-        max_seq_len=task.seq_len - 1,  # length of the shifted `inputs` array
+        max_seq_len=max(task.seq_len - 1, int(cfg.get("model_max_seq_len", 0))),
         d_model=cfg["d_model"],
         n_layers=cfg["n_layers"],
         n_heads=cfg["n_heads"],
         d_ff=cfg["d_ff"],
         dropout=cfg.get("dropout", 0.0),
+        precision=cfg.get("precision", "float32"),
     )
 
 
@@ -64,9 +64,7 @@ def make_train_step(
         loss_mask = jnp.broadcast_to(loss_weights[None, :], labels.shape)
 
         def loss_fn(p):
-            logits = model.apply(
-                {"params": p}, inputs, deterministic=False, rngs={"dropout": dropout_rng}
-            )
+            logits = model.apply({"params": p}, inputs, deterministic=False, rngs={"dropout": dropout_rng})
             loss = metrics_lib.cross_entropy_loss(logits, labels, loss_mask)
             return loss, logits
 
@@ -95,11 +93,28 @@ def make_eval_step(model: DecoderOnlyTransformer, answer_mask: jnp.ndarray):
     return jax.jit(eval_step)
 
 
+def make_generate_step(model: DecoderOnlyTransformer, task: data.AdditionTask):
+    """Build a jitted greedy decoder used for honest free-running evaluation."""
+
+    # Pass params explicitly while retaining a static Python loop length.
+    def with_params(params, prompt_ids):
+        ids = prompt_ids
+        for _ in range(task.result_digits):
+            logits = model.apply({"params": params}, ids, deterministic=True)
+            next_ids = jnp.argmax(logits[:, -1, :], axis=-1)
+            ids = jnp.concatenate([ids, next_ids[:, None]], axis=1)
+        return ids[:, task.prompt_len : task.answer_end]
+
+    return jax.jit(with_params)
+
+
 def infinite_batches(examples: List[data.Example], batch_size: int, seed: int) -> Iterator[np.ndarray]:
     epoch = 0
     while True:
         yielded_any = False
-        for batch in data.batch_iterator(examples, batch_size, shuffle=True, seed=seed + epoch, drop_last=True):
+        for batch in data.batch_iterator(
+            examples, batch_size, shuffle=True, seed=seed + epoch, drop_last=True
+        ):
             yielded_any = True
             yield batch
         if not yielded_any:
@@ -176,15 +191,48 @@ def _public_schedule(schedule: List[Dict]) -> List[Dict]:
 
 def run_eval(eval_step_fn, params, examples: List[data.Example], batch_size: int) -> Dict[str, float]:
     totals = {"loss": 0.0, "token_acc": 0.0, "exact_match_acc": 0.0}
-    n_batches = 0
-    for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=True):
+    n_examples = 0
+    for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=False):
         out = eval_step_fn(params, jnp.array(batch))
         for k in totals:
-            totals[k] += float(out[k])
-        n_batches += 1
-    if n_batches == 0:
+            totals[k] += float(out[k]) * len(batch)
+        n_examples += len(batch)
+    if n_examples == 0:
         return {k: float("nan") for k in totals}
-    return {k: v / n_batches for k, v in totals.items()}
+    return {k: v / n_examples for k, v in totals.items()}
+
+
+def run_generation_eval(
+    generate_step_fn, params, examples, batch_size: int, task: data.AdditionTask
+) -> float:
+    """Evaluate full-answer exact match without exposing prior answer tokens."""
+    correct = 0
+    total = 0
+    for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=False):
+        batch_array = jnp.array(batch)
+        pred = generate_step_fn(params, batch_array[:, : task.prompt_len])
+        target = batch_array[:, task.answer_start : task.answer_end]
+        correct += int(jnp.sum(jnp.all(pred == target, axis=1)))
+        total += len(batch)
+    return correct / total if total else float("nan")
+
+
+def generation_examples(generate_step_fn, params, examples, task: data.AdditionTask, limit: int = 10):
+    selected = examples[:limit]
+    batch = jnp.array(data.examples_to_array(selected))
+    predictions = np.asarray(generate_step_fn(params, batch[:, : task.prompt_len]))
+    rows = []
+    for example, prediction in zip(selected, predictions, strict=True):
+        predicted_text = tok.decode(prediction.tolist())
+        rows.append(
+            {
+                "prompt": example.prompt,
+                "target": example.target_answer,
+                "prediction": predicted_text,
+                "correct": predicted_text == example.target_answer,
+            }
+        )
+    return rows
 
 
 def _build_eval_slices(cfg: Dict, seed: int, task: data.AdditionTask) -> Dict[str, List[data.Example]]:
@@ -193,10 +241,20 @@ def _build_eval_slices(cfg: Dict, seed: int, task: data.AdditionTask) -> Dict[st
     n_eval = cfg["n_eval"]
     return {
         "one_digit": data.make_curriculum_dataset(
-            n_eval, seed + 201, "eval_one_digit", max_operand=min(9, task.operand_max), sampling="random", task=task
+            n_eval,
+            seed + 201,
+            "eval_one_digit",
+            max_operand=min(9, task.operand_max),
+            sampling="random",
+            task=task,
         ),
         "two_digit": data.make_curriculum_dataset(
-            n_eval, seed + 202, "eval_two_digit", max_operand=min(99, task.operand_max), sampling="random", task=task
+            n_eval,
+            seed + 202,
+            "eval_two_digit",
+            max_operand=min(99, task.operand_max),
+            sampling="random",
+            task=task,
         ),
         "no_carry": data.make_curriculum_dataset(
             n_eval, seed + 203, "eval_no_carry", max_operand=task.operand_max, sampling="no_carry", task=task
@@ -206,8 +264,12 @@ def _build_eval_slices(cfg: Dict, seed: int, task: data.AdditionTask) -> Dict[st
     }
 
 
-def _run_eval_slices(eval_step_fn, params, eval_slices: Dict[str, List[data.Example]], batch_size: int) -> Dict:
-    return {name: run_eval(eval_step_fn, params, examples, batch_size) for name, examples in eval_slices.items()}
+def _run_eval_slices(
+    eval_step_fn, params, eval_slices: Dict[str, List[data.Example]], batch_size: int
+) -> Dict:
+    return {
+        name: run_eval(eval_step_fn, params, examples, batch_size) for name, examples in eval_slices.items()
+    }
 
 
 def train(cfg: Dict, config_name: str):
@@ -236,6 +298,7 @@ def train(cfg: Dict, config_name: str):
     answer_mask = jnp.array(data.answer_loss_mask(task))
     train_step_fn = make_train_step(model, optimizer, loss_weights, answer_mask)
     eval_step_fn = make_eval_step(model, answer_mask)
+    generate_step_fn = make_generate_step(model, task)
 
     print(
         f"[train_jax] config={config_name} device={jax.devices()[0].platform} "
@@ -243,6 +306,7 @@ def train(cfg: Dict, config_name: str):
     )
 
     eval_examples = data.generate_dataset(cfg["n_eval"], seed, "eval", task=task)
+    test_examples = data.generate_dataset(cfg.get("n_test", cfg["n_eval"]), seed, "test", task=task)
     carry_examples = data.make_carry_heavy_dataset(cfg["n_carry_heavy"], seed, task=task)
     eval_slices = _build_eval_slices(cfg, seed, task)
 
@@ -288,12 +352,18 @@ def train(cfg: Dict, config_name: str):
 
         if step % eval_every == 0 or step == train_steps:
             eval_metrics = run_eval(eval_step_fn, params, eval_examples, cfg["batch_size"])
+            generated_exact = run_generation_eval(
+                generate_step_fn, params, eval_examples, cfg["batch_size"], task
+            )
+            carry_generated_exact = run_generation_eval(
+                generate_step_fn, params, carry_examples, cfg["batch_size"], task
+            )
             carry_metrics = run_eval(eval_step_fn, params, carry_examples, cfg["batch_size"])
             slice_metrics = _run_eval_slices(eval_step_fn, params, eval_slices, cfg["batch_size"])
             print(
                 f"step {step:5d} [{current_stage['name']}] | train_loss={float(step_metrics['loss']):.4f} "
                 f"train_exact={float(step_metrics['exact_match_acc']):.3f} | "
-                f"eval_loss={eval_metrics['loss']:.4f} eval_exact={eval_metrics['exact_match_acc']:.3f} | "
+                f"eval_loss={eval_metrics['loss']:.4f} generated_exact={generated_exact:.3f} | "
                 f"carry_exact={carry_metrics['exact_match_acc']:.3f}"
             )
             history.append(
@@ -306,7 +376,9 @@ def train(cfg: Dict, config_name: str):
                     "eval_loss": eval_metrics["loss"],
                     "eval_token_acc": eval_metrics["token_acc"],
                     "eval_exact_match_acc": eval_metrics["exact_match_acc"],
+                    "eval_generated_exact_match_acc": generated_exact,
                     "carry_heavy_exact_match_acc": carry_metrics["exact_match_acc"],
+                    "carry_heavy_generated_exact_match_acc": carry_generated_exact,
                     "eval_slices": slice_metrics,
                     "step_time_sec": step_time,
                 }
@@ -314,7 +386,8 @@ def train(cfg: Dict, config_name: str):
 
     warmup = min(5, len(step_times))
     steady_state = step_times[warmup:] if len(step_times) > warmup else step_times
-    steady_state_step_time_ms = 1000.0 * (sum(steady_state) / len(steady_state)) if steady_state else float("nan")
+    timing_stats = utils.timing_statistics(steady_state)
+    steady_state_step_time_ms = timing_stats["mean_ms"]
     tokens_per_sec = (
         cfg["batch_size"] * seq_len_inputs / (steady_state_step_time_ms / 1000.0)
         if steady_state_step_time_ms == steady_state_step_time_ms
@@ -322,8 +395,19 @@ def train(cfg: Dict, config_name: str):
     )
 
     final_eval = run_eval(eval_step_fn, params, eval_examples, cfg["batch_size"])
+    final_generated_exact = run_generation_eval(
+        generate_step_fn, params, eval_examples, cfg["batch_size"], task
+    )
+    final_carry_generated_exact = run_generation_eval(
+        generate_step_fn, params, carry_examples, cfg["batch_size"], task
+    )
+    final_test = run_eval(eval_step_fn, params, test_examples, cfg["batch_size"])
+    final_test_generated_exact = run_generation_eval(
+        generate_step_fn, params, test_examples, cfg["batch_size"], task
+    )
     final_carry = run_eval(eval_step_fn, params, carry_examples, cfg["batch_size"])
     final_eval_slices = _run_eval_slices(eval_step_fn, params, eval_slices, cfg["batch_size"])
+    memory_stats = jax.devices()[0].memory_stats() or {}
 
     result = {
         "backend": "jax",
@@ -337,6 +421,7 @@ def train(cfg: Dict, config_name: str):
         "result_digits": task.result_digits,
         "prompt_len": task.prompt_len,
         "answer_order": task.answer_order,
+        "precision": cfg.get("precision", "float32"),
         "train_steps": train_steps,
         "curriculum_enabled": bool(cfg.get("curriculum", {}).get("enabled", False)),
         "curriculum_schedule": public_schedule,
@@ -347,11 +432,19 @@ def train(cfg: Dict, config_name: str):
         },
         "first_step_time_sec": first_step_time,
         "steady_state_step_time_ms": steady_state_step_time_ms,
+        "timing_statistics": timing_stats,
         "tokens_per_sec": tokens_per_sec,
         "eval_loss": final_eval["loss"],
         "eval_token_accuracy": final_eval["token_acc"],
-        "eval_exact_match_accuracy": final_eval["exact_match_acc"],
+        "eval_teacher_forced_exact_match_accuracy": final_eval["exact_match_acc"],
+        "eval_generated_exact_match_accuracy": final_generated_exact,
+        "test_teacher_forced_exact_match_accuracy": final_test["exact_match_acc"],
+        "test_generated_exact_match_accuracy": final_test_generated_exact,
+        "test_generation_examples": generation_examples(generate_step_fn, params, test_examples, task),
         "carry_heavy_exact_match_accuracy": final_carry["exact_match_acc"],
+        "carry_heavy_generated_exact_match_accuracy": final_carry_generated_exact,
+        "environment": utils.environment_metadata(),
+        "peak_device_memory_bytes": memory_stats.get("peak_bytes_in_use"),
         "eval_slices": final_eval_slices,
         "history": history,
     }

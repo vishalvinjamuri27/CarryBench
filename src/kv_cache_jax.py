@@ -57,7 +57,7 @@ def init_cache(cfg: TransformerConfig, batch_size: int, max_len: int) -> KVCache
     return KVCache(k=jnp.zeros(shape), v=jnp.zeros(shape))
 
 
-def _layer_norm(x: jnp.ndarray, p: Dict, eps: float = 1e-6) -> jnp.ndarray:
+def _layer_norm(x: jnp.ndarray, p: Dict, eps: float = 1e-5) -> jnp.ndarray:
     mean = jnp.mean(x, axis=-1, keepdims=True)
     var = jnp.var(x, axis=-1, keepdims=True)
     return (x - mean) / jnp.sqrt(var + eps) * p["scale"] + p["bias"]

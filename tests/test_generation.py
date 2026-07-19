@@ -36,14 +36,20 @@ class TestGeneration(unittest.TestCase):
     def test_kv_cache_generation_matches_naive_shape_and_output(self):
         n_tokens = data.RESULT_DIGITS + 1
         naive_out = gen.generate_naive(self.model, self.params, self.prompt_ids, n_tokens)
-        kv_out = kv.generate_with_kv_cache(self.params, self.cfg, self.prompt_ids, n_tokens, max_len=data.SEQ_LEN)
+        kv_out = kv.generate_with_kv_cache(
+            self.params, self.cfg, self.prompt_ids, n_tokens, max_len=data.SEQ_LEN
+        )
 
         self.assertEqual(naive_out.shape, kv_out.shape)
-        self.assertTrue(bool(jnp.all(naive_out == kv_out)), "KV-cache decoding must match naive decoding exactly")
+        self.assertTrue(
+            bool(jnp.all(naive_out == kv_out)), "KV-cache decoding must match naive decoding exactly"
+        )
 
     def test_jitted_kv_cache_matches_reference(self):
         n_tokens = data.RESULT_DIGITS + 1
-        ref_out = kv.generate_with_kv_cache(self.params, self.cfg, self.prompt_ids, n_tokens, max_len=data.SEQ_LEN)
+        ref_out = kv.generate_with_kv_cache(
+            self.params, self.cfg, self.prompt_ids, n_tokens, max_len=data.SEQ_LEN
+        )
 
         jit_prefill = kv.make_jit_prefill(self.cfg)
         jit_decode = kv.make_jit_decode_step(self.cfg)

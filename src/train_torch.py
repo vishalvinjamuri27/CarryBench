@@ -21,19 +21,31 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from . import data
+from . import data, utils
 from . import tokenizer as tok
-from . import utils
 from .torch_model import DecoderOnlyTransformer, count_params
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+
+
+def _autocast(model, device: torch.device):
+    precision = getattr(model, "benchmark_precision", "float32")
+    if precision not in {"float32", "bfloat16"}:
+        raise ValueError(f"Unsupported precision {precision!r}")
+    return torch.autocast(
+        device_type=device.type,
+        dtype=torch.bfloat16,
+        enabled=precision == "bfloat16",
+    )
 
 
 def infinite_batches(examples: List[data.Example], batch_size: int, seed: int) -> Iterator[np.ndarray]:
     epoch = 0
     while True:
         yielded_any = False
-        for batch in data.batch_iterator(examples, batch_size, shuffle=True, seed=seed + epoch, drop_last=True):
+        for batch in data.batch_iterator(
+            examples, batch_size, shuffle=True, seed=seed + epoch, drop_last=True
+        ):
             yielded_any = True
             yield batch
         if not yielded_any:
@@ -146,10 +158,20 @@ def _build_eval_slices(cfg: Dict, seed: int, task: data.AdditionTask) -> Dict[st
     n_eval = cfg["n_eval"]
     return {
         "one_digit": data.make_curriculum_dataset(
-            n_eval, seed + 201, "eval_one_digit", max_operand=min(9, task.operand_max), sampling="random", task=task
+            n_eval,
+            seed + 201,
+            "eval_one_digit",
+            max_operand=min(9, task.operand_max),
+            sampling="random",
+            task=task,
         ),
         "two_digit": data.make_curriculum_dataset(
-            n_eval, seed + 202, "eval_two_digit", max_operand=min(99, task.operand_max), sampling="random", task=task
+            n_eval,
+            seed + 202,
+            "eval_two_digit",
+            max_operand=min(99, task.operand_max),
+            sampling="random",
+            task=task,
         ),
         "no_carry": data.make_curriculum_dataset(
             n_eval, seed + 203, "eval_no_carry", max_operand=task.operand_max, sampling="no_carry", task=task
@@ -160,9 +182,16 @@ def _build_eval_slices(cfg: Dict, seed: int, task: data.AdditionTask) -> Dict[st
 
 
 def _run_eval_slices(
-    model, eval_slices: Dict[str, List[data.Example]], batch_size: int, device: torch.device, answer_mask: np.ndarray
+    model,
+    eval_slices: Dict[str, List[data.Example]],
+    batch_size: int,
+    device: torch.device,
+    answer_mask: np.ndarray,
 ) -> Dict:
-    return {name: run_eval(model, examples, batch_size, device, answer_mask) for name, examples in eval_slices.items()}
+    return {
+        name: run_eval(model, examples, batch_size, device, answer_mask)
+        for name, examples in eval_slices.items()
+    }
 
 
 @torch.no_grad()
@@ -171,20 +200,70 @@ def run_eval(
 ) -> Dict[str, float]:
     model.eval()
     totals = {"loss": 0.0, "token_acc": 0.0, "exact_match_acc": 0.0}
-    n_batches = 0
-    for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=True):
-        batch_t = torch.from_numpy(batch).long().to(device)
-        inputs, labels = batch_t[:, :-1], batch_t[:, 1:]
-        logits = model(inputs)
-        m = compute_metrics(logits, labels, answer_mask)
-        totals["loss"] += float(m["loss"])
-        totals["token_acc"] += m["token_acc"]
-        totals["exact_match_acc"] += m["exact_match_acc"]
-        n_batches += 1
+    n_examples = 0
+    with torch.no_grad():
+        for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=False):
+            batch_t = torch.from_numpy(batch).long().to(device)
+            inputs, labels = batch_t[:, :-1], batch_t[:, 1:]
+            with _autocast(model, device):
+                logits = model(inputs)
+            m = compute_metrics(logits, labels, answer_mask)
+            for key in totals:
+                totals[key] += (float(m["loss"]) if key == "loss" else m[key]) * len(batch)
+            n_examples += len(batch)
     model.train()
-    if n_batches == 0:
+    if n_examples == 0:
         return {k: float("nan") for k in totals}
-    return {k: v / n_batches for k, v in totals.items()}
+    return {k: v / n_examples for k, v in totals.items()}
+
+
+def run_generation_eval(
+    model, examples, batch_size: int, device: torch.device, task: data.AdditionTask
+) -> float:
+    """Greedily generate answers without teacher forcing and return exact match."""
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch in data.batch_iterator(examples, batch_size, shuffle=False, drop_last=False):
+            batch_t = torch.from_numpy(batch).long().to(device)
+            ids = batch_t[:, : task.prompt_len]
+            for _ in range(task.result_digits):
+                with _autocast(model, device):
+                    logits = model(ids)
+                ids = torch.cat([ids, torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)], dim=1)
+            pred = ids[:, task.prompt_len : task.answer_end]
+            target = batch_t[:, task.answer_start : task.answer_end]
+            correct += int(torch.sum(torch.all(pred == target, dim=1)).item())
+            total += len(batch)
+    model.train()
+    return correct / total if total else float("nan")
+
+
+def generation_examples(model, examples, device: torch.device, task: data.AdditionTask, limit: int = 10):
+    selected = examples[:limit]
+    batch = torch.from_numpy(data.examples_to_array(selected)).long().to(device)
+    ids = batch[:, : task.prompt_len]
+    model.eval()
+    with torch.no_grad():
+        for _ in range(task.result_digits):
+            with _autocast(model, device):
+                logits = model(ids)
+            ids = torch.cat([ids, torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)], dim=1)
+    predictions = ids[:, task.prompt_len : task.answer_end].cpu().numpy()
+    model.train()
+    rows = []
+    for example, prediction in zip(selected, predictions, strict=True):
+        predicted_text = tok.decode(prediction.tolist())
+        rows.append(
+            {
+                "prompt": example.prompt,
+                "target": example.target_answer,
+                "prediction": predicted_text,
+                "correct": predicted_text == example.target_answer,
+            }
+        )
+    return rows
 
 
 def train(cfg: Dict, config_name: str, use_compile: bool = False):
@@ -208,7 +287,9 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
         n_heads=cfg["n_heads"],
         d_ff=cfg["d_ff"],
         dropout=cfg.get("dropout", 0.0),
+        use_sdpa=bool(cfg.get("torch_sdpa", False)),
     ).to(device)
+    model.benchmark_precision = cfg.get("precision", "float32")
     n_params = count_params(model)
 
     compiled = False
@@ -219,7 +300,11 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
         except Exception as e:  # torch.compile can fail for many environment-specific reasons
             print(f"[train_torch] torch.compile unavailable/failed ({e}); falling back to eager mode")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"])
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"]
+    )
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     loss_weights = make_loss_weights(cfg, device, task)
     answer_mask = data.answer_loss_mask(task)
 
@@ -229,6 +314,7 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
     )
 
     eval_examples = data.generate_dataset(cfg["n_eval"], seed, "eval", task=task)
+    test_examples = data.generate_dataset(cfg.get("n_test", cfg["n_eval"]), seed, "test", task=task)
     carry_examples = data.make_carry_heavy_dataset(cfg["n_carry_heavy"], seed, task=task)
     eval_slices = _build_eval_slices(cfg, seed, task)
 
@@ -267,15 +353,24 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
         t0 = time.perf_counter()
 
         optimizer.zero_grad()
-        logits = model(inputs)
-        m = compute_metrics(logits, labels, answer_mask, loss_weights=loss_weights)
-        m["loss"].backward()
+        with _autocast(model, device):
+            logits = model(inputs)
+            per_token_loss = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]), labels.reshape(-1), reduction="none"
+            ).reshape_as(labels)
+            weights = loss_weights[None, :].expand_as(per_token_loss)
+            loss = torch.sum(per_token_loss * weights) / torch.clamp(torch.sum(weights), min=1.0)
+        loss.backward()
         optimizer.step()
-        m["loss"] = m["loss"].detach()
 
         if device.type == "cuda":
             torch.cuda.synchronize()
         step_time = time.perf_counter() - t0
+
+        # Host transfers and reporting metrics are intentionally outside the
+        # timed region so the benchmark measures the train step itself.
+        m = compute_metrics(logits.detach(), labels, answer_mask, loss_weights=loss_weights)
+        m["loss"] = loss.detach()
 
         if step == 1:
             first_step_time = step_time
@@ -284,12 +379,16 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
 
         if step % eval_every == 0 or step == train_steps:
             eval_metrics = run_eval(model, eval_examples, cfg["batch_size"], device, answer_mask)
+            generated_exact = run_generation_eval(model, eval_examples, cfg["batch_size"], device, task)
+            carry_generated_exact = run_generation_eval(
+                model, carry_examples, cfg["batch_size"], device, task
+            )
             carry_metrics = run_eval(model, carry_examples, cfg["batch_size"], device, answer_mask)
             slice_metrics = _run_eval_slices(model, eval_slices, cfg["batch_size"], device, answer_mask)
             print(
                 f"step {step:5d} [{current_stage['name']}] | train_loss={float(m['loss']):.4f} "
                 f"train_exact={m['exact_match_acc']:.3f} | "
-                f"eval_loss={eval_metrics['loss']:.4f} eval_exact={eval_metrics['exact_match_acc']:.3f} | "
+                f"eval_loss={eval_metrics['loss']:.4f} generated_exact={generated_exact:.3f} | "
                 f"carry_exact={carry_metrics['exact_match_acc']:.3f}"
             )
             history.append(
@@ -302,7 +401,9 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
                     "eval_loss": eval_metrics["loss"],
                     "eval_token_acc": eval_metrics["token_acc"],
                     "eval_exact_match_acc": eval_metrics["exact_match_acc"],
+                    "eval_generated_exact_match_acc": generated_exact,
                     "carry_heavy_exact_match_acc": carry_metrics["exact_match_acc"],
+                    "carry_heavy_generated_exact_match_acc": carry_generated_exact,
                     "eval_slices": slice_metrics,
                     "step_time_sec": step_time,
                 }
@@ -310,7 +411,8 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
 
     warmup = min(5, len(step_times))
     steady_state = step_times[warmup:] if len(step_times) > warmup else step_times
-    steady_state_step_time_ms = 1000.0 * (sum(steady_state) / len(steady_state)) if steady_state else float("nan")
+    timing_stats = utils.timing_statistics(steady_state)
+    steady_state_step_time_ms = timing_stats["mean_ms"]
     tokens_per_sec = (
         cfg["batch_size"] * max_seq_len / (steady_state_step_time_ms / 1000.0)
         if steady_state_step_time_ms == steady_state_step_time_ms
@@ -318,6 +420,10 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
     )
 
     final_eval = run_eval(model, eval_examples, cfg["batch_size"], device, answer_mask)
+    final_generated_exact = run_generation_eval(model, eval_examples, cfg["batch_size"], device, task)
+    final_carry_generated_exact = run_generation_eval(model, carry_examples, cfg["batch_size"], device, task)
+    final_test = run_eval(model, test_examples, cfg["batch_size"], device, answer_mask)
+    final_test_generated_exact = run_generation_eval(model, test_examples, cfg["batch_size"], device, task)
     final_carry = run_eval(model, carry_examples, cfg["batch_size"], device, answer_mask)
     final_eval_slices = _run_eval_slices(model, eval_slices, cfg["batch_size"], device, answer_mask)
 
@@ -327,6 +433,8 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
         "seed": seed,
         "device": str(device),
         "compiled": compiled,
+        "torch_sdpa": bool(cfg.get("torch_sdpa", False)),
+        "precision": cfg.get("precision", "float32"),
         "model_params": n_params,
         "batch_size": cfg["batch_size"],
         "seq_len": max_seq_len,
@@ -344,11 +452,21 @@ def train(cfg: Dict, config_name: str, use_compile: bool = False):
         },
         "first_step_time_sec": first_step_time,
         "steady_state_step_time_ms": steady_state_step_time_ms,
+        "timing_statistics": timing_stats,
         "tokens_per_sec": tokens_per_sec,
         "eval_loss": final_eval["loss"],
         "eval_token_accuracy": final_eval["token_acc"],
-        "eval_exact_match_accuracy": final_eval["exact_match_acc"],
+        "eval_teacher_forced_exact_match_accuracy": final_eval["exact_match_acc"],
+        "eval_generated_exact_match_accuracy": final_generated_exact,
+        "test_teacher_forced_exact_match_accuracy": final_test["exact_match_acc"],
+        "test_generated_exact_match_accuracy": final_test_generated_exact,
+        "test_generation_examples": generation_examples(model, test_examples, device, task),
         "carry_heavy_exact_match_accuracy": final_carry["exact_match_acc"],
+        "carry_heavy_generated_exact_match_accuracy": final_carry_generated_exact,
+        "environment": utils.environment_metadata(),
+        "peak_device_memory_bytes": (
+            int(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else None
+        ),
         "eval_slices": final_eval_slices,
         "history": history,
     }
@@ -372,7 +490,9 @@ def save_outputs(result: Dict, model, device: torch.device, n_params: int, confi
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Path to a YAML config (e.g. configs/smoke.yaml)")
-    parser.add_argument("--compile", action="store_true", help="Try torch.compile (falls back to eager on failure)")
+    parser.add_argument(
+        "--compile", action="store_true", help="Try torch.compile (falls back to eager on failure)"
+    )
     args = parser.parse_args()
 
     cfg = utils.load_config(args.config)
