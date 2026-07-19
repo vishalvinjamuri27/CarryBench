@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Improve project navigation, engineering-scope summary, package metadata, and local artifact hygiene.
+
 ## 0.2.0 - 2026-07-19
 
 - Make train/eval/test splits disjoint by construction.

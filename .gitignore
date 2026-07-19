@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
+*.zip
+*.pdf
 
 # Generated benchmark/training outputs and checkpoints -- keep the dir via .gitkeep
 results/*
