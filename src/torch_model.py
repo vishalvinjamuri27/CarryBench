@@ -7,11 +7,7 @@ blocks of (LayerNorm -> causal self-attention -> residual, LayerNorm ->
 GELU MLP -> residual), final LayerNorm, linear LM head. Implemented from
 scratch (no `transformers` dependency).
 
-Known minor differences from the Flax model (documented for honesty, not
-hidden):
-  * GELU: PyTorch's default `F.gelu` is the exact erf-based formulation;
-    `jax.nn.gelu` defaults to the tanh approximation. Functionally very
-    close, but not bit-identical.
+Known minor difference from the Flax model:
   * Initialization: PyTorch's default `nn.Linear`/`nn.Embedding` init
     differs from Flax's default initializers. We do not try to force
     parity, since the point of the comparison is runtime behavior, not
@@ -28,7 +24,7 @@ import torch.nn.functional as F
 
 
 class CausalSelfAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0, use_sdpa: bool = False):
         super().__init__()
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         self.n_heads = n_heads
@@ -38,6 +34,8 @@ class CausalSelfAttention(nn.Module):
         self.v_proj = nn.Linear(d_model, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
+        self.dropout_rate = dropout
+        self.use_sdpa = use_sdpa
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, D = x.shape
@@ -47,12 +45,20 @@ class CausalSelfAttention(nn.Module):
         k = self.k_proj(x).view(B, T, H, hd).transpose(1, 2)
         v = self.v_proj(x).view(B, T, H, hd).transpose(1, 2)
 
-        attn_logits = (q @ k.transpose(-2, -1)) / math.sqrt(hd)
-        causal_mask = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))
-        attn_logits = attn_logits.masked_fill(~causal_mask, float("-inf"))
-        attn_weights = self.dropout(F.softmax(attn_logits, dim=-1))
-
-        out = attn_weights @ v  # (B, H, T, hd)
+        if self.use_sdpa:
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                dropout_p=self.dropout_rate if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            attn_logits = (q @ k.transpose(-2, -1)) / math.sqrt(hd)
+            causal_mask = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))
+            attn_logits = attn_logits.masked_fill(~causal_mask, float("-inf"))
+            attn_weights = self.dropout(F.softmax(attn_logits, dim=-1))
+            out = attn_weights @ v  # (B, H, T, hd)
         out = out.transpose(1, 2).contiguous().view(B, T, D)
         return self.out_proj(out)
 
@@ -69,10 +75,10 @@ class MLPBlock(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.0):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float = 0.0, use_sdpa: bool = False):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attn = CausalSelfAttention(d_model, n_heads, dropout)
+        self.attn = CausalSelfAttention(d_model, n_heads, dropout, use_sdpa=use_sdpa)
         self.ln2 = nn.LayerNorm(d_model)
         self.mlp = MLPBlock(d_model, d_ff, dropout)
 
@@ -92,13 +98,14 @@ class DecoderOnlyTransformer(nn.Module):
         n_heads: int = 8,
         d_ff: int = 1024,
         dropout: float = 0.0,
+        use_sdpa: bool = False,
     ):
         super().__init__()
         self.token_embed = nn.Embedding(vocab_size, d_model)
         self.pos_embed = nn.Embedding(max_seq_len, d_model)
         self.dropout = nn.Dropout(dropout)
         self.blocks = nn.ModuleList(
-            [TransformerBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)]
+            [TransformerBlock(d_model, n_heads, d_ff, dropout, use_sdpa=use_sdpa) for _ in range(n_layers)]
         )
         self.ln_f = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size)

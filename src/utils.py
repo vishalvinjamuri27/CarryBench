@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict
 
@@ -20,7 +22,44 @@ def load_config(path: str) -> Dict[str, Any]:
         cfg = yaml.safe_load(f)
     if cfg is None:
         raise ValueError(f"Config file {path} is empty")
+    validate_config(cfg)
     return cfg
+
+
+def validate_config(cfg: Dict[str, Any]) -> None:
+    """Fail early on malformed experiment configurations."""
+    required = {
+        "d_model",
+        "n_layers",
+        "n_heads",
+        "d_ff",
+        "batch_size",
+        "learning_rate",
+        "weight_decay",
+        "train_steps",
+        "eval_every",
+        "n_train",
+        "n_eval",
+        "n_carry_heavy",
+    }
+    missing = sorted(required - cfg.keys())
+    if missing:
+        raise ValueError(f"Missing required config fields: {', '.join(missing)}")
+    positive = required - {"weight_decay", "learning_rate"}
+    for key in positive:
+        if int(cfg[key]) <= 0:
+            raise ValueError(f"{key} must be positive, got {cfg[key]!r}")
+    if float(cfg["learning_rate"]) <= 0:
+        raise ValueError("learning_rate must be positive")
+    if float(cfg["weight_decay"]) < 0:
+        raise ValueError("weight_decay must be non-negative")
+    if int(cfg["d_model"]) % int(cfg["n_heads"]) != 0:
+        raise ValueError("d_model must be divisible by n_heads")
+    for key in ("prompt_loss_weight", "answer_loss_weight", "eos_loss_weight"):
+        if float(cfg.get(key, 1.0)) < 0:
+            raise ValueError(f"{key} must be non-negative")
+    if cfg.get("precision", "float32") not in {"float32", "bfloat16"}:
+        raise ValueError("precision must be 'float32' or 'bfloat16'")
 
 
 @dataclass
@@ -85,3 +124,39 @@ def count_params(params_pytree) -> int:
     import jax
 
     return sum(x.size for x in jax.tree_util.tree_leaves(params_pytree))
+
+
+def environment_metadata() -> Dict[str, Any]:
+    """Collect enough version and revision data to audit an experiment."""
+    versions: Dict[str, Any] = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+    }
+    for package in ("jax", "jaxlib", "flax", "optax", "torch", "numpy"):
+        try:
+            module = __import__(package)
+            versions[package] = getattr(module, "__version__", "unknown")
+        except ImportError:
+            versions[package] = None
+    try:
+        versions["git_commit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent.parent, text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        versions["git_commit"] = None
+    return versions
+
+
+def timing_statistics(step_times: list[float]) -> Dict[str, float]:
+    """Summarize repeated synchronized step timings in milliseconds."""
+    import numpy as np
+
+    if not step_times:
+        return {key: float("nan") for key in ("mean_ms", "median_ms", "p95_ms", "std_ms")}
+    values = np.asarray(step_times, dtype=np.float64) * 1000.0
+    return {
+        "mean_ms": float(np.mean(values)),
+        "median_ms": float(np.median(values)),
+        "p95_ms": float(np.percentile(values, 95)),
+        "std_ms": float(np.std(values)),
+    }

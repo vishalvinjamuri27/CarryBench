@@ -6,6 +6,9 @@ on:
 
 jobs:
   unit-tests:
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -14,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -23,3 +26,21 @@ jobs:
 
       - name: Run unit tests
         run: python -m unittest discover -s tests
+
+      - name: Static checks
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+
+  smoke-training:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt
+      - name: Exercise both training pipelines
+        run: |
+          python -m src.train_jax --config configs/smoke.yaml
+          python -m src.train_torch --config configs/smoke.yaml

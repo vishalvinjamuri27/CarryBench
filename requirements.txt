@@ -11,3 +11,7 @@ torch>=2.1.0
 
 numpy>=1.24
 pyyaml>=6.0
+
+# Development/test tooling used by CI.
+ruff>=0.8
+matplotlib>=3.8

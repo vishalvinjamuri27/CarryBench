@@ -24,3 +24,7 @@ n_train: 2000
 n_eval: 200
 n_test: 200
 n_carry_heavy: 200
+
+# Keep the CPU KV-cache integration check short; GPU configs use the default
+# extended 5/16/32/64-token sweep.
+kv_generate_lengths: [5, 8]

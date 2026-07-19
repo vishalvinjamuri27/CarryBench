@@ -58,6 +58,20 @@ class TestData(unittest.TestCase):
         eval_pairs = {(e.a, e.b) for e in eval_}
         self.assertEqual(len(train_pairs & eval_pairs), 0)
 
+    def test_standard_splits_are_disjoint_at_realistic_size(self):
+        for seed in range(3):
+            train = data.generate_dataset(20_000, seed=seed, split="train")
+            eval_ = data.generate_dataset(2_000, seed=seed, split="eval")
+            test = data.generate_dataset(2_000, seed=seed, split="test")
+            sets = [{(e.a, e.b) for e in split} for split in (train, eval_, test)]
+            self.assertFalse(sets[0] & sets[1])
+            self.assertFalse(sets[0] & sets[2])
+            self.assertFalse(sets[1] & sets[2])
+
+    def test_impossible_unique_request_fails_fast(self):
+        with self.assertRaisesRegex(ValueError, "partition"):
+            data.generate_dataset(81, seed=0, split="train", max_operand=9)
+
     def test_generate_dataset_can_limit_operand_range(self):
         ds = data.generate_dataset(50, seed=0, split="train", max_operand=9, unique=False)
         self.assertTrue(all(0 <= ex.a <= 9 and 0 <= ex.b <= 9 for ex in ds))
@@ -109,6 +123,11 @@ class TestData(unittest.TestCase):
         self.assertEqual(len(batches), 2)  # 20 // 8 = 2
         for b in batches:
             self.assertEqual(b.shape, (8, data.SEQ_LEN))
+
+    def test_batch_iterator_keeps_partial_batch(self):
+        ds = data.generate_dataset(20, seed=0, split="train")
+        batches = list(data.batch_iterator(ds, batch_size=8, shuffle=False, drop_last=False))
+        self.assertEqual([len(batch) for batch in batches], [8, 8, 4])
 
     def test_answer_loss_mask_selects_correct_positions(self):
         mask = data.answer_loss_mask()

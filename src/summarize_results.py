@@ -10,11 +10,11 @@ import argparse
 import csv
 import json
 import math
+import random
 import re
 import statistics
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
-
 
 TRAIN_FIELDS = [
     "path",
@@ -35,8 +35,12 @@ TRAIN_FIELDS = [
     "first_step_time_sec",
     "steady_state_step_time_ms",
     "tokens_per_sec",
-    "eval_exact_match_accuracy",
+    "eval_generated_exact_match_accuracy",
+    "eval_teacher_forced_exact_match_accuracy",
+    "test_generated_exact_match_accuracy",
+    "test_teacher_forced_exact_match_accuracy",
     "carry_heavy_exact_match_accuracy",
+    "carry_heavy_generated_exact_match_accuracy",
     "time_to_50",
     "time_to_90",
     "time_to_99",
@@ -52,10 +56,20 @@ AGG_FIELDS = [
     "answer_order",
     "loss_type",
     "train_steps",
-    "eval_exact_match_accuracy_mean",
-    "eval_exact_match_accuracy_std",
+    "eval_generated_exact_match_accuracy_mean",
+    "eval_generated_exact_match_accuracy_std",
+    "eval_generated_exact_match_accuracy_ci95_low",
+    "eval_generated_exact_match_accuracy_ci95_high",
+    "eval_teacher_forced_exact_match_accuracy_mean",
+    "eval_teacher_forced_exact_match_accuracy_std",
+    "test_generated_exact_match_accuracy_mean",
+    "test_generated_exact_match_accuracy_std",
+    "test_generated_exact_match_accuracy_ci95_low",
+    "test_generated_exact_match_accuracy_ci95_high",
     "carry_heavy_exact_match_accuracy_mean",
     "carry_heavy_exact_match_accuracy_std",
+    "carry_heavy_generated_exact_match_accuracy_mean",
+    "carry_heavy_generated_exact_match_accuracy_std",
     "steady_state_step_time_ms_mean",
     "steady_state_step_time_ms_std",
     "tokens_per_sec_mean",
@@ -97,7 +111,7 @@ def loss_type(obj: Dict[str, Any]) -> str:
 
 def time_to_threshold(history: Iterable[Dict[str, Any]], threshold: float) -> int | None:
     for record in history:
-        if float(record.get("eval_exact_match_acc", -math.inf)) >= threshold:
+        if float(record.get("eval_generated_exact_match_acc", -math.inf)) >= threshold:
             return int(record["step"])
     return None
 
@@ -124,8 +138,16 @@ def train_row(path: Path, obj: Dict[str, Any]) -> Dict[str, Any]:
         "first_step_time_sec": obj.get("first_step_time_sec", ""),
         "steady_state_step_time_ms": obj.get("steady_state_step_time_ms", ""),
         "tokens_per_sec": obj.get("tokens_per_sec", ""),
-        "eval_exact_match_accuracy": obj.get("eval_exact_match_accuracy", ""),
+        "eval_generated_exact_match_accuracy": obj.get("eval_generated_exact_match_accuracy", ""),
+        "eval_teacher_forced_exact_match_accuracy": obj.get(
+            "eval_teacher_forced_exact_match_accuracy", obj.get("eval_exact_match_accuracy", "")
+        ),
+        "test_generated_exact_match_accuracy": obj.get("test_generated_exact_match_accuracy", ""),
+        "test_teacher_forced_exact_match_accuracy": obj.get("test_teacher_forced_exact_match_accuracy", ""),
         "carry_heavy_exact_match_accuracy": obj.get("carry_heavy_exact_match_accuracy", ""),
+        "carry_heavy_generated_exact_match_accuracy": obj.get(
+            "carry_heavy_generated_exact_match_accuracy", ""
+        ),
         "time_to_50": time_to_threshold(history, 0.50),
         "time_to_90": time_to_threshold(history, 0.90),
         "time_to_99": time_to_threshold(history, 0.99),
@@ -157,6 +179,17 @@ def std(values: List[float]) -> str:
     return f"{statistics.stdev(values):.6g}"
 
 
+def bootstrap_ci(values: List[float], n_resamples: int = 5000) -> tuple[str, str]:
+    """Deterministic percentile bootstrap interval for a sample mean."""
+    if len(values) < 2:
+        return "", ""
+    rng = random.Random(0)
+    means = sorted(statistics.fmean(rng.choice(values) for _ in values) for _ in range(n_resamples))
+    low = means[int(0.025 * (n_resamples - 1))]
+    high = means[int(0.975 * (n_resamples - 1))]
+    return f"{low:.6g}", f"{high:.6g}"
+
+
 def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     groups: Dict[tuple, List[Dict[str, Any]]] = {}
     for row in rows:
@@ -178,8 +211,11 @@ def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "train_steps": first.get("train_steps", ""),
         }
         for field in [
-            "eval_exact_match_accuracy",
+            "eval_generated_exact_match_accuracy",
+            "eval_teacher_forced_exact_match_accuracy",
+            "test_generated_exact_match_accuracy",
             "carry_heavy_exact_match_accuracy",
+            "carry_heavy_generated_exact_match_accuracy",
             "steady_state_step_time_ms",
             "tokens_per_sec",
             "time_to_90",
@@ -188,6 +224,10 @@ def aggregate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             values = numeric_values(group, field)
             agg[f"{field}_mean"] = mean(values)
             agg[f"{field}_std"] = std(values)
+            if field in {"eval_generated_exact_match_accuracy", "test_generated_exact_match_accuracy"}:
+                low, high = bootstrap_ci(values)
+                agg[f"{field}_ci95_low"] = low
+                agg[f"{field}_ci95_high"] = high
         out.append(agg)
     return out
 

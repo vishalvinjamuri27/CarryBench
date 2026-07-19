@@ -20,7 +20,9 @@ from . import tokenizer as tok
 from .flax_model import DecoderOnlyTransformer
 
 
-def generate_naive(model: DecoderOnlyTransformer, params, prompt_ids: jnp.ndarray, n_tokens: int) -> jnp.ndarray:
+def generate_naive(
+    model: DecoderOnlyTransformer, params, prompt_ids: jnp.ndarray, n_tokens: int
+) -> jnp.ndarray:
     """Greedily generate `n_tokens` new tokens after `prompt_ids`.
 
     prompt_ids: (B, P) int32 array.
@@ -36,7 +38,9 @@ def generate_naive(model: DecoderOnlyTransformer, params, prompt_ids: jnp.ndarra
     return ids
 
 
-def generate_one_with_eos(model: DecoderOnlyTransformer, params, prompt_ids: jnp.ndarray, max_new_tokens: int) -> List[int]:
+def generate_one_with_eos(
+    model: DecoderOnlyTransformer, params, prompt_ids: jnp.ndarray, max_new_tokens: int
+) -> List[int]:
     """Single-sequence convenience wrapper that stops early at <eos>.
 
     prompt_ids: (1, P) int32 array.

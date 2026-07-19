@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carrybench"
+version = "0.2.0"
+description = "Controlled JAX and PyTorch transformer training/runtime benchmark"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Vishal Vinjamuri"}]
+dependencies = [
+  "jax>=0.4.25",
+  "jaxlib>=0.4.25",
+  "flax>=0.8.0",
+  "optax>=0.1.9",
+  "torch>=2.1.0",
+  "numpy>=1.24",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8", "matplotlib>=3.8"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
