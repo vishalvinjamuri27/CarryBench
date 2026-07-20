@@ -9,6 +9,8 @@ Matched decoder-only transformers in JAX/Flax/Optax and PyTorch, benchmarked on 
 1. How do JAX JIT, PyTorch eager, PyTorch SDPA, and `torch.compile` compare on compile cost, throughput, latency, and memory for the same architecture?
 2. How do loss masking and carry-aligned answer order affect free-running algorithmic generalization?
 
+**Skills demonstrated:** end-to-end transformer training in JAX and PyTorch, custom KV-cache decoding, synchronized GPU benchmarking under JIT compilation and fused attention, mixed-precision training, deterministic experimental design, and bootstrap confidence intervals.
+
 For a fast technical read, jump to the [JAX model](src/flax_model.py), [PyTorch model](src/torch_model.py), [manual KV cache](src/kv_cache_jax.py), [framework-parity test](tests/test_framework_parity.py), and [artifact provenance](artifacts/final/README.md).
 
 ## Results
