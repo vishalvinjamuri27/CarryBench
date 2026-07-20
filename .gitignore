@@ -5,9 +5,8 @@ __pycache__/
 *.zip
 *.pdf
 
-# Generated benchmark/training outputs and checkpoints -- keep the dir via .gitkeep
-results/*
-!results/.gitkeep
+# Generated benchmark/training outputs and checkpoints
+results/
 
 # Expanded release exports are reproducible; Git keeps compact CSV/PNG artifacts only
 artifacts/final/raw/
