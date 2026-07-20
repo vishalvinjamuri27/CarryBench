@@ -20,9 +20,7 @@ def plot_accuracy(results_dir: Path, output_dir: Path) -> None:
     rows = [row for row in rows if row.get(metric)]
     if not rows:
         return
-    labels = [
-        f"{row['backend']}\n{row['config_family'].removeprefix('colab_')}" for row in rows
-    ]
+    labels = [f"{row['backend']}\n{row['config_family'].removeprefix('colab_')}" for row in rows]
     values = [float(row[metric]) for row in rows]
     fig, ax = plt.subplots(figsize=(max(8, len(rows) * 0.7), 5))
     ax.bar(labels, values, color=["#5b8ff9" if row["backend"] == "jax" else "#f6bd16" for row in rows])
