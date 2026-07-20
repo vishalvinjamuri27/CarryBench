@@ -15,18 +15,18 @@ For a fast technical read, jump to the [JAX model](src/flax_model.py), [PyTorch 
 
 ## Results
 
-**Quality** (mean ± sample std across seeds 0, 1, 2 on the hash-partitioned, disjoint test set; free-running greedy exact match, no teacher forcing):
+**Quality** (mean ± sample std across seeds 0-4 on the hash-partitioned, disjoint test set; free-running greedy exact match, no teacher forcing):
 
 | Experiment (1,000 steps) | JAX test EM | PyTorch test EM |
 |---|---:|---:|
-| 5-digit full-sequence LM | 34.35% ± 50.10% | 1.07% ± 0.51% |
-| 6-digit full-sequence LM | 2.73% ± 4.69% | 0.12% ± 0.13% |
-| 5-digit answer-only | 94.95% ± 0.75% | 74.33% ± 32.51% |
-| 6-digit answer-only | 91.72% ± 0.88% | 52.48% ± 47.53% |
+| 5-digit full-sequence LM | 39.53% ± 49.04% | 1.09% ± 0.41% |
+| 6-digit full-sequence LM | 1.64% ± 3.64% | 0.09% ± 0.10% |
+| 5-digit answer-only | 95.22% ± 0.66% | 61.84% ± 39.04% |
+| 6-digit answer-only | 91.58% ± 2.14% | 45.51% ± 41.06% |
 | 5-digit reversed answer | **100.00% ± 0.00%** | **100.00% ± 0.00%** |
 | 6-digit reversed answer | **100.00% ± 0.00%** | **100.00% ± 0.00%** |
 
-Emitting the answer least-significant digit first, aligned with carry propagation, reaches 100% free-running exact match on both frameworks at both digit lengths. Normal-order answer-only training is strong in JAX but unstable in PyTorch at 1,000 steps; a single-seed 3,000-step 6-digit run reaches ~99.3% in both. Full-sequence LM loss is substantially worse. Large standard deviations are reported as-is: three seeds expose brittle optimization without pretending to estimate it precisely.
+Emitting the answer least-significant digit first, aligned with carry propagation, reaches 100% free-running exact match on **all 10 reversed-answer runs** (both frameworks × both digit lengths × 5 seeds). Normal-order answer-only training is stable in JAX but genuinely bimodal in PyTorch at 1,000 steps — the large standard deviations reflect real convergence failures on individual seeds, not measurement noise. A single-seed 3,000-step 6-digit run reaches ~99.3% in both frameworks, showing that more compute closes the gap. Full-sequence LM loss is substantially worse across the board.
 
 ![Generated exact-match results](artifacts/final/generated_accuracy.png)
 
@@ -120,7 +120,7 @@ The reversed-answer ablation emits least-significant digits first so generation 
 - Addition is compact and deterministic; results do not generalize to large corpora or open-ended generation.
 - JAX JIT and PyTorch eager exercise different compilation strategies. SDPA and compiled PyTorch reduce, but do not eliminate, framework implementation differences.
 - Framework default initializers differ. Paired data seeds do not make optimization trajectories numerically identical.
-- Three seeds are economical for Colab but weak for unstable results; five or more are recommended for release claims.
+- Five seeds (0-4) are used for all quality claims. This is enough to expose bimodal convergence in PyTorch answer-only training but not enough to characterize its full distribution.
 - The model is small enough that kernel-launch overhead can dominate runtime.
 - KV-cache benefits on synthetic long decoding show runtime scaling, not model quality.
 - GPU results vary with accelerator, driver, CUDA/cuDNN, framework version, thermal state, and shared runtime load.

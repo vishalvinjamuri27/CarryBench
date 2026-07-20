@@ -4,10 +4,9 @@ This directory contains the compact publication artifacts for the results report
 
 ## Quality results
 
-- Source: corrected post-split-fix experiment bundle.
-- Git commit recorded by every run: `4f3431dca7a40fbb0e23f3a627fea2d1ebd0db8c`.
-- Published contents: per-run and aggregate CSV tables plus the generated-accuracy PNG.
-- Source audit: all 38 bundle runs contained `eval_generated_exact_match_accuracy`, `test_generated_exact_match_accuracy`, and `test_generation_examples`.
+- Source: 5-seed (0-4) quality bundle. Seeds 0-2 were run at commit `4f3431dca7a40fbb0e23f3a627fea2d1ebd0db8c` (the corrected post-split-fix bundle); seeds 3-4 were run later on the same code path with no changes to data splits, model, optimizer, or evaluation.
+- Published contents: per-run and aggregate CSV tables (all 62 rows: 6 configs × 5 seeds × 2 frameworks + 2 seed-0 long runs) plus the generated-accuracy PNG.
+- Source audit: every run contains `eval_generated_exact_match_accuracy`, `test_generated_exact_match_accuracy`, and `test_generation_examples`.
 
 ## Runtime and KV-cache results
 
